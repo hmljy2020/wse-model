@@ -1,0 +1,7 @@
+{
+  "kind": "delay_ack",
+  "participant": "D",
+  "router": 0,
+  "flit": 1,
+  "cycles": 9
+}

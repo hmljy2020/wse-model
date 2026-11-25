@@ -43,6 +43,13 @@ migration boundary and the remaining interface decisions.
 | **Runtime** | load / per-launch / steady-state tiers, the three dispatch chains, three-version fault, `CalReg` install window, kickstart, wave and drain constraints | [Whitepaper §12, §14](docs/design/wse-system-architecture-whitepaper.md) |
 | **Performance analysis** | balance points and minimum batches, the five-block latency budget, the D-cache residency account, and both a first-order and a tile-accurate roofline verdict ([decision 0006](docs/decisions/0006-two-roofline-verdicts.md)) | [Whitepaper §19](docs/design/wse-system-architecture-whitepaper.md), [Calendar §3.8](docs/design/wse-calendar-scheme.md) |
 
+## Cycle-by-cycle SST replay
+
+Run `sst/calendar/run.sh --suite --out .wse_model_out/calendar` to reproduce the
+four-core Calendar AllGather on a line and a T-shaped mesh, inspect the seven
+offline replays, and check the rejected cyclic deployment.
+[Inputs, timing assumptions and replay guide](sst/calendar/README.md)
+
 ## Repository layout
 
 ```text

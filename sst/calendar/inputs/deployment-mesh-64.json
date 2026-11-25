@@ -1,0 +1,46 @@
+{
+  "mapping": {"A": 0, "B": 1, "C": 2, "D": 4},
+  "shared_tile_base": 4096,
+  "routes": {
+    "A": {
+      "opcode": 1,
+      "routeBits": "3e03",
+      "reservations": [
+        [0, [1], [1, 21]],
+        [1, [2, 4, "local"], [6, 26]],
+        [2, ["local"], [11, 31]],
+        [4, ["local"], [11, 31]]
+      ]
+    },
+    "B": {
+      "opcode": 1,
+      "routeBits": "3b03",
+      "reservations": [
+        [1, [0, 2, 4], [1, 21]],
+        [0, ["local"], [7, 27]],
+        [2, ["local"], [7, 27]],
+        [4, ["local"], [7, 27]]
+      ]
+    },
+    "C": {
+      "opcode": 1,
+      "routeBits": "2f03",
+      "reservations": [
+        [2, [1], [1, 21]],
+        [1, [0, 4, "local"], [8, 28]],
+        [0, ["local"], [13, 33]],
+        [4, ["local"], [13, 33]]
+      ]
+    },
+    "D": {
+      "opcode": 1,
+      "routeBits": "3f02",
+      "reservations": [
+        [4, [1], [1, 21]],
+        [1, [0, 2, "local"], [9, 29]],
+        [0, ["local"], [14, 34]],
+        [2, ["local"], [14, 34]]
+      ]
+    }
+  }
+}

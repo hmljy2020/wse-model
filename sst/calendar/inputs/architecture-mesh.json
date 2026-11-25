@@ -1,0 +1,13 @@
+{
+  "rows": 2,
+  "columns": 3,
+  "period_ps": 500,
+  "width_bytes": 64,
+  "link_cycles": 2,
+  "credit_cycles": 2,
+  "ingress_depth": 4,
+  "landing_depth": 4,
+  "shared_cycles": 2,
+  "epoch_bits": 8,
+  "fork_policy": "atomic-all-ports"
+}

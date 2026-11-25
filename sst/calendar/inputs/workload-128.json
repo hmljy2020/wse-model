@@ -1,0 +1,28 @@
+{
+  "operation": "AllGather",
+  "participants": {
+    "A": {
+      "seed": 0,
+      "bytes": 128
+    },
+    "B": {
+      "seed": 64,
+      "bytes": 128
+    },
+    "C": {
+      "seed": 128,
+      "bytes": 128
+    },
+    "D": {
+      "seed": 192,
+      "bytes": 128
+    }
+  },
+  "layout": [
+    "A",
+    "B",
+    "C",
+    "D"
+  ],
+  "consume_after": "tile.publish"
+}

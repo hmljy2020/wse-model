@@ -1,0 +1,30 @@
+{
+  "mapping": {"A": 0, "B": 1, "C": 2, "D": 3},
+  "shared_tile_base": 4096,
+  "routes": {
+    "A": {
+      "opcode": 1,
+      "routeBits": "fe",
+      "reservations": [
+      ]
+    },
+    "B": {
+      "opcode": 1,
+      "routeBits": "fb",
+      "reservations": [
+      ]
+    },
+    "C": {
+      "opcode": 1,
+      "routeBits": "ef",
+      "reservations": [
+      ]
+    },
+    "D": {
+      "opcode": 1,
+      "routeBits": "bf",
+      "reservations": [
+      ]
+    }
+  }
+}
