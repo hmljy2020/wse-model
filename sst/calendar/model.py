@@ -227,9 +227,9 @@ class Model:
             "tile_hex": self.tile.hex(),
         }
 
-    def write_image(self, path):
-        # Numeric records form the private loader/element ABI. No event times or
-        # expected Tile bytes are supplied to the element.
+    def write_image(self, path, node):
+        # Each element receives its own source bytes and reservations. The last
+        # global slot bounds publication for this single generation.
         a = self.arch
         lines = []
 
@@ -237,24 +237,24 @@ class Model:
             lines.append(" ".join(map(str, fields)))
 
         record(
-            "mesh",
-            self.mesh.rows,
-            self.mesh.cols,
-            a["link_cycles"],
-            a["credit_cycles"],
+            "resources",
             a["ingress_depth"],
             a["landing_depth"],
             a["shared_cycles"],
             self.base,
             len(self.tile),
+            self.slots[-1].cycle,
         )
-        for n in self.nodes:
-            bits = "".join(str(int(p)) for p in self.routes[n].pairs())
-            record("source", n, self.opcode, bits, self.offset[n], self.expected_rx[n])
-            for seq, frag in enumerate(self.fragments[n]):
-                record("flit", n, seq, frag.hex())
+        if node in self.nodes:
+            bits = "".join(str(int(p)) for p in self.routes[node].pairs())
+            record("source", self.opcode, bits, self.offset[node], self.expected_rx[node])
+            for seq, frag in enumerate(self.fragments[node]):
+                record("flit", seq, frag.hex())
         for s in self.slots:
-            record("slot", s.cycle, s.node, self.opcode, s.source, s.seq, len(s.ports), *s.ports)
+            if s.node == node:
+                record(
+                    "slot", s.cycle, self.opcode, s.source, s.seq, s.ingress, len(s.ports), *s.ports
+                )
         c = self.case
         record(
             "case",

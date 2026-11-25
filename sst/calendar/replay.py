@@ -23,22 +23,24 @@ def plan_id(node, peer, source, seq):
     return f"slot-{node}-{peer}-{source}-{seq}"
 
 
-def convert(m, records):
-    entities = [{"id": "BSP", "x": -1, "y": -1}]
+def convert(m, records, graph):
+    entities = []
     endpoints = []
-    for n in m.mesh.nodes:
+    for component in graph["components"]:
+        n = int(component["params"]["node"])
         y, x = m.mesh.coords(n)
         label = f"R{n}"
         if n in m.nodes:
             label += " / " + m.names[m.nodes.index(n)]
         entities.append({"id": f"R{n}", "label": label, "x": x, "y": y})
-        endpoints.extend(
-            {"id": endpoint(n, p), "entity": f"R{n}"} for p in (*m.mesh.neighbours(n), -1)
-        )
-    connections = [
-        {"id": link(n, p), "endpoints": [endpoint(n, p), endpoint(p, n)]} for n, p in m.mesh.links()
-    ]
-    origin = next((r["cycle"] for r in records if r["kind"] == "bsp.align"), None)
+        endpoints.append({"id": endpoint(n, -1), "entity": f"R{n}"})
+    connections = []
+    for wire in graph["links"]:
+        a, b = (int(wire[side]["component"][1:]) for side in ("left", "right"))
+        pair = [endpoint(a, b), endpoint(b, a)]
+        endpoints.extend([{"id": pair[0], "entity": f"R{a}"}, {"id": pair[1], "entity": f"R{b}"}])
+        connections.append({"id": link(a, b), "endpoints": pair})
+    origin = next((r["cycle"] for r in records if r["kind"] in ("bsp.align", "node.align")), None)
     plans = (
         [
             {
@@ -56,12 +58,12 @@ def convert(m, records):
         if origin is not None
         else []
     )
+    plan_ids = {plan["id"] for plan in plans}
     names = dict(zip(m.nodes, m.names, strict=True))
     events = []
     for r in records:
         n, peer, src, seq, k = (r[key] for key in ("node", "peer", "source", "flit", "kind"))
-        where = "BSP" if n == -1 else f"R{n}"
-        e = {"id": f"e{r['id']}", "at": str(r["cycle"]), "kind": k, "where": where}
+        e = {"id": f"e{r['id']}", "at": str(r["cycle"]), "kind": k, "where": f"R{n}"}
         if src >= 0:
             e.update(
                 data=f"{names[src]}/f{seq}",
@@ -76,18 +78,21 @@ def convert(m, records):
             sent = r["id"] if k == "send" else r["cause"]
             e.update(where=endpoint(n, peer), connection=link(n, peer), transfer_id=f"h{sent}")
         if k in ("send", "land", "fault"):
-            e.update(where=endpoint(n, peer), plan_id=plan_id(n, peer, src, seq))
+            e["where"] = endpoint(n, peer)
+            candidate = plan_id(n, peer, src, seq)
+            if candidate in plan_ids:
+                e["plan_id"] = candidate
         if peer >= 0 and k in (
             "credit.return",
             "credit.withhold",
-            "credit.restore",
-            "drop",
             "release",
         ):
             e["where"] = endpoint(n, peer)
             e["connection"] = link(n, peer)
-        if k == "fault" and peer >= 0:
-            e["connection"] = link(n, peer)
+        if k == "fault":
+            e["relative_cycle"] = r["relative_cycle"]
+            if peer >= 0:
+                e["connection"] = link(n, peer)
         if k in ("tile.publish", "consumer.read"):
             e["data"] = f"Tile@R{n}"
         if r["detail"] != "-":
@@ -116,7 +121,7 @@ def convert(m, records):
         "format": "network-trace",
         "version": "1.0",
         "title": f"Calendar AllGather · {m.mesh.rows}×{m.mesh.cols} · {len(m.tile)} B Tile · {m.case.get('kind', 'normal')}",
-        "source": "SST wsecalendar.fabric",
+        "source": "SST wsecalendar.node",
         "coverage": "BSP, directed router ports, Shared and TMU",
         "timebase": {"tick_fs": str(1000 * m.arch["period_ps"])},
         "window": {"start": "0", "end": str(records[-1]["cycle"])},

@@ -30,6 +30,12 @@ def audit(model, records):
     last_write = Counter()
     reported, reads, published = {}, {}, {}
     setup = defaultdict(dict)
+    ready, aligned, done = {}, {}, {}
+    parent = {
+        n: (-1 if n == 0 else n - (1 if n % m.mesh.cols else m.mesh.cols)) for n in m.mesh.nodes
+    }
+    children = {n: [c for c in m.mesh.neighbours(n) if parent[c] == n] for n in m.mesh.nodes}
+    latency = m.arch["link_cycles"]
     origin = fault = drain = None
     tiles = {n: bytearray(len(m.tile)) for n in m.nodes}
     coverage = {n: set() for n in m.nodes}
@@ -53,6 +59,8 @@ def audit(model, records):
         key = (n, src, seq)
         s = slots.get(key)
         check(rid not in ids and t >= previous_tick and drain is None, "invalid event order")
+        check(n in parent and rid % m.mesh.node_count == n, "observation has wrong component")
+        check(fault is None, "event after terminal fault")
         check(cause == -1 or cause in ids, "cause is absent or in the future")
         ids[rid] = r
         previous_tick = t
@@ -63,7 +71,6 @@ def audit(model, records):
             "land",
             "duplicate",
             "release",
-            "drop",
             "local.write",
             "shared.ack",
             "credit.withhold",
@@ -95,16 +102,23 @@ def audit(model, records):
                 delay = m.case["cycles"] if variant == "late" and n == m.target else 0
                 check(t == setup[n]["source.ready"] + delay, "incorrect readiness delay")
                 reported[n] = t
-        elif k == "bsp.align":
-            check(
-                origin is None and set(reported) == set(m.nodes) and t == max(reported.values()),
-                "BSP origin does not coincide with last report",
-            )
+        elif k == "node.ready":
+            check(n not in ready and peer == parent[n], "unexpected readiness report")
+            check(all(c in ready for c in children[n]), "readiness precedes child report")
+            check(n not in m.nodes or n in reported, "readiness precedes local report")
+            due = max([reported.get(n, 1), *(ready[c] + latency for c in children[n])])
+            check(t == due, "incorrect readiness gather latency")
+            ready[n] = t
+        elif k in ("bsp.align", "node.align"):
+            check(k == ("bsp.align" if n == 0 else "node.align"), "wrong alignment component")
+            check(len(ready) == m.mesh.node_count and n not in aligned, "incomplete startup tree")
+            common = ready[0] + (m.mesh.rows + m.mesh.cols - 2) * latency
+            check(t == common, "incorrect common start cycle")
+            aligned[n] = t
             origin = t
         elif k == "inject":
             check(
                 origin is not None
-                and fault is None
                 and s
                 and n == src
                 and t == origin + s.cycle
@@ -127,8 +141,7 @@ def audit(model, records):
             milestones[n]["last_link_arrival"] = t
         elif k in ("send", "land"):
             check(
-                fault is None
-                and s
+                s
                 and origin is not None
                 and t == origin + s.cycle
                 and peer in s.ports
@@ -174,22 +187,17 @@ def audit(model, records):
             )
             duplicate_due.remove(cause)
             duplicate[key] += 1
-        elif k in ("release", "drop"):
+        elif k == "release":
             check(
                 active.pop(key, None) == cause and s and peer == s.ingress, "unknown input release"
             )
-            if k == "release":
-                check(
-                    fault is None
-                    and origin is not None
-                    and t == origin + s.cycle
-                    and sorted(branches[key]) == sorted(s.ports),
-                    "incomplete or non-atomic fork",
-                )
-                released.add(key)
-            else:
-                check(fault is not None and not branches[key], "unjustified or partial drop")
-                accepted["dropped"] += 1
+            check(
+                origin is not None
+                and t == origin + s.cycle
+                and sorted(branches[key]) == sorted(s.ports),
+                "incomplete or non-atomic fork",
+            )
+            released.add(key)
             if peer >= 0:
                 check(fifo[n, peer] and fifo[n, peer].popleft() == key, "ingress FIFO order")
                 credit_due[rid] = (peer, n, t + m.arch["credit_cycles"])
@@ -213,24 +221,19 @@ def audit(model, records):
                 "credit withholding does not match available tokens or case",
             )
             held[n, peer] = rid, amount
-        elif k == "credit.restore":
-            check(
-                held.pop((n, peer), None) == (cause, int(r["detail"]))
-                and fault is not None
-                and t == fault["cycle"] + 1,
-                "withheld credit not restored",
-            )
         elif k == "fault":
             check(
                 variant == "credit"
-                and fault is None
                 and origin is not None
                 and s
                 and (n, src, seq, peer)
                 == (m.case["router"], m.target, m.case["flit"], m.case["port"])
                 and t == origin + s.cycle
+                and r["relative_cycle"] == s.cycle
                 and r["detail"] == "no-credit"
                 and (n, peer) in held
+                and not branches[key]
+                and key not in released
                 and not published,
                 "unexpected fault site, reason or cycle",
             )
@@ -258,8 +261,7 @@ def audit(model, records):
             tiles[n][start : start + len(data)] = data
         elif k == "tile.publish":
             check(
-                fault is None
-                and n not in published
+                n not in published
                 and origin is not None
                 and t > origin + m.slots[-1].cycle
                 and released == slots.keys()
@@ -280,6 +282,17 @@ def audit(model, records):
                 "consumer lacks published Tile",
             )
             reads[n] = t
+        elif k == "node.done":
+            check(n not in done and peer == parent[n], "unexpected completion report")
+            check(n not in m.nodes or n in reads and reads[n] < t, "completion before consumer")
+            check(
+                all(c in done and done[c] + latency <= t for c in children[n]), "incomplete subtree"
+            )
+            check(
+                not any(count for (sender, _), count in used.items() if sender == n),
+                "completion with outstanding credits",
+            )
+            done[n] = t
         elif k == "drain":
             check(
                 not (
@@ -293,25 +306,30 @@ def audit(model, records):
                 ),
                 "drain with unfinished transactions",
             )
-            check(r["detail"] == ("aborted" if fault else "success"), "wrong drain status")
-            if not fault:
-                check(
-                    set(reads) == set(m.nodes) and t > max(reads.values()),
-                    "drain precedes consumer completion",
-                )
+            check(r["detail"] == "success" and n == 0 and done.get(0) == t, "wrong drain status")
+            check(
+                set(reads) == set(m.nodes) and t > max(reads.values()),
+                "drain precedes consumer completion",
+            )
             drain = t
         else:
             check(False, f"unknown event {k}")
 
-    check(drain is not None and origin is not None, "missing alignment or terminal drain")
+    check(origin is not None, "missing BSP alignment")
     if variant == "credit":
         check(fault and not published and not reads, "failed generation published or fault missing")
-        index = m.slots.index(slots[fault["node"], fault["source"], fault["flit"]])
-        check(
-            released == {(s.node, s.source, s.seq) for s in m.slots[:index]},
-            "first violation differs from observed slot prefix",
-        )
+        check(fault["node"] in aligned and drain is None, "invalid fatal node lifecycle")
+        # Other SST threads can stop partway through an independent slot. The
+        # detecting component must have served every preceding local reservation.
+        prior = {
+            (s.node, s.source, s.seq)
+            for s in m.slots
+            if s.node == fault["node"] and s.cycle < fault["cycle"] - origin
+        }
+        check(prior <= released, "missing local reservation before first violation")
     else:
+        check(len(aligned) == m.mesh.node_count, "missing node alignment")
+        check(drain is not None and len(done) == m.mesh.node_count, "missing terminal drain")
         check(released == slots.keys() and set(reads) == set(m.nodes), "missing transfers or Tiles")
     wanted = {(m.case["router"], m.target, m.case["flit"]): 1} if variant == "duplicate" else {}
     check(duplicate == wanted, "duplicate disturbance mismatch")
@@ -339,9 +357,9 @@ def audit(model, records):
     return {
         "passed": True,
         "highlights": highlights,
-        "outcome": "aborted" if fault else "published",
+        "outcome": "fatal" if fault else "published",
         "origin_cycle": origin,
-        "last_reporters": [n for n, t in reported.items() if t == origin],
+        "last_reporters": [n for n, t in reported.items() if t == max(reported.values())],
         "wait_for_group_cycles": {n: origin - t for n, t in reported.items()},
         "report_cycles": reported,
         "report_delay_cycles": {n: t - setup[n]["source.ready"] for n, t in reported.items()},
@@ -353,13 +371,4 @@ def audit(model, records):
         "transactions": dict(accepted),
         "duplicate_events": [f"e{r['id']}" for r in records if r["kind"] == "duplicate"],
         "published_tiles": {n: tiles[n].hex() for n in published},
-        "first_fault": None
-        if not fault
-        else {
-            **fault,
-            "id": f"e{fault['id']}",
-            "relative_cycle": fault["cycle"] - origin,
-            "participant": m.names[m.nodes.index(fault["source"])],
-            "port": f"R{fault['node']}->R{fault['peer']}",
-        },
     }

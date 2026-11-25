@@ -6,7 +6,7 @@
 sst/calendar/run.sh --suite --out .wse_model_out/calendar
 ```
 
-打开输出目录中的 **replay.html**，用案例菜单切换七次 SST 运行。初始画面停在首批 flit 飞行途中。选择逻辑参与者 B 可以追踪该源的全部分片，选择 B/f0 可以单独追踪首个分片。点箭头查看配对的发送与到达事件，用「±1 tick」逐拍前进。链路虚线显示当前预约，「故障」跳转到首次违约。每个案例的 `report.json` 中，`highlights` 给出扰动的事件 ID、拍号和相对于报告目录的回放链接。
+打开输出目录中的 **replay.html**，用案例菜单切换七个运行案例。初始画面停在首批 flit 飞行途中。选择逻辑参与者 B 可以追踪该源的全部分片，选择 B/f0 可以单独追踪首个分片。点箭头查看配对的发送与到达事件，用「±1 tick」逐拍前进。链路虚线显示当前预约，「故障」跳转到首次违约。每个案例的 `report.json` 中，`highlights` 给出扰动的事件 ID、拍号和相对于报告目录的回放链接。
 
 | 案例目录 | 输入组合与验收 |
 | --- | --- |
@@ -14,9 +14,9 @@ sst/calendar/run.sh --suite --out .wse_model_out/calendar
 | B | 使用 A 的负载，在 2×3 mesh 的 0、1、2、4 号节点形成 T 形树。B/f0 从 R1 同拍发往三个方向。四份 Tile 与 A 逐字节相同。 |
 | C | 使用 A 的架构，每人 128 B。每核收到 384 B 唯一远端数据，发布 512 B Tile。 |
 | late | D 晚报到 7 拍。观察其余三核的等待时间及首笔注入的平移。 |
-| credit | R1 向 R0 的预约出口暂扣可用 credit。观察 C/f0 的原子分叉失败、在途分片的最终状态和失败代际排空。 |
+| credit | R1 向 R0 的预约出口暂扣可用 credit。C/f0 在相对第 8 拍违约，R1 刷新诊断并调用 SST fatal，回放停在该拍。 |
 | duplicate | R1 的本地落核接口重复交付 A/f0。第二份在第一份等待 Shared 写确认时被识别并去重。 |
-| delay_ack | D 最后一个分片在 R0 的 Shared 写确认延迟 9 拍。停在第 40 拍，所有分片均已落核，R0 仍在等写确认。 |
+| delay_ack | D 最后一个分片在 R0 的 Shared 写确认延迟 9 拍。停在 BSP 相对第 40 拍，所有分片均已落核，R0 仍在等写确认。 |
 | invalid | 2×2 四角同时参与，诱导子图有环。加载器在启动 SST 前返回 `V-TREE-ACYCLIC`，诊断保存在该目录的报告中。 |
 
 ## 单次运行与独立检查
@@ -29,9 +29,9 @@ inputs=("$cal/inputs/workload-64.json" "$cal/inputs/architecture-line.json" "$ca
 "$cal/run.sh" "${inputs[@]}" --case "$cal/cases/credit.json" --check-events .wse_model_out/credit/events.tsv
 ```
 
-`--reference-only` 显示各源在对称 Shared Tile 中的位置和期望字节。`--check-events` 直接重读三份输入与 SST 原始日志。检查器配对每跳发送与到达，重建 FIFO、credit、原子分叉、去重和可见字节覆盖，并将发布内容与逻辑负载逐字节比较。违约案例通过验收时，报告同时给出 `passed: true` 和代际结果 `outcome: aborted`。不符合案例预期的观测使进程以非零状态退出。
+`--reference-only` 显示各源在对称 Shared Tile 中的位置和期望字节。`--check-events` 直接重读三份输入与 SST 原始日志。检查器配对每跳发送与到达，重建 FIFO、credit、原子分叉、去重和可见字节覆盖，并将发布内容与逻辑负载逐字节比较。单独运行 credit 案例返回 SST 退出码 42。验收套件同时核对退出码、SST fatal 诊断、首个违约的位置和相对拍，匹配时报告 `passed: true`、`outcome: fatal` 和 `drain_cycle: null`。
 
-每次 SST 运行输出 `events.tsv`、`reference.json`、`trace.json`（network-trace 1.0）、`replay.html` 和 `report.json`。原始日志的整数 ID 对应回放中的 `e<ID>`，`cause` 指向实际前序事件。`suite.json` 汇总八项验收。
+每次运行保存 SST 导出的组件、端口、连线和线程分区图 `sst-topology.json`、进程输出 `sst.log`、每个物理节点的原始观测 `R*.tsv`、按拍合并的 `events.tsv`、`reference.json`、`trace.json`（network-trace 1.0）、`replay.html` 和 `report.json`。原始日志的整数 ID 对应回放中的 `e<ID>`，`cause` 指向实际前序事件。`suite.json` 汇总八项验收。每个可执行案例均以单、双线程运行；双线程结果在 `two-threads/` 下，相邻编号交替分配线程。可用 `--threads 2` 单独复现。
 
 ## 输入约定
 
@@ -42,8 +42,10 @@ inputs=("$cal/inputs/workload-64.json" "$cal/inputs/architecture-line.json" "$ca
 
 ## 参考时序与范围
 
-`wsecalendar.fabric` 是一个 SST 时钟驱动的单时钟域 element。router、核、各方向链路的传输流水和 credit 返回流水在 element 内推进。原始拍号来自 SST 时钟回调。所有案例使用 epoch 1。本例的链路宽度包括逐 flit 头部，因而 64 B 贡献在直线上拆为 61 B 和 3 B，在六节点 mesh 上拆为 60 B 和 4 B。
+`sdl.py` 按架构行列数创建 `wsecalendar.node`，通过一条双向 `sst.Link` 连接每对正交邻居。1×4 有四个组件和三条链路；2×3 有六个组件和七条链路，含未映射负载的节点。每个节点只装入本核的源分片和本路由器的预约，管理自己的 Tile、Shared 队列、输入 FIFO 和出口 credit。回放的物理连线取自 SST 配置图。所有案例使用 epoch 1。64 B 贡献在直线上拆为 61 B 和 3 B，在六节点 mesh 上拆为 60 B 和 4 B。
 
-第 1 拍绑定源数据、登记接收范围、预留目标容量并完成本地段写入。BSP 在最后一核报到的同拍建立原点。每拍先处理到期的 credit、链路到达和 Shared 确认，再服务预约。输入直到所有转发出口和本地队列共同接受后才释放，随后经过配置的返回延迟归还 credit。写服务时间包含确认，本例的延迟确认会占用对应 Shared 服务端口。
+启动和完成采用一棵以 R0 为根的控制树。路径先沿第一列向下，再沿目标行横向延伸。第 1 拍各核准备源数据和本地段；晚到者在指定拍报到。每个节点收齐子树就绪消息并完成本地准备后向父节点报告。根选择「收齐拍 + 树高 × link_cycles」作为共同原点，并沿树下发。直线案例 A 的原点是绝对第 13 拍；相对第 1 拍 R0 发送 A/f0，第 3 拍 R1 收到，第 6 拍 R1 同时落核并转发。
 
-本参考实现将整轮预约均已通过作为发布的一个条件，确保一次时隙违约能使整个代际保持未发布。TMU 在最终预约和本核最后一次有效确认之后的时钟沿检查发布条件。排空检查在发布后观察到所有消费者依赖已满足、FIFO 和在途记录为空、所有 credit 已归还时完成。故障后，已经接受的 Shared 写继续确认，尚未转发的输入和之后到达的在途 flit 留下 drop 记录。缓冲、延迟和原子分叉策略是本轮显式参考参数。该实现覆盖四核验收范围，32 核 ROW → COL FFN 是后续阶段。
+链路的基础延迟取 `link_cycles` 与 `credit_cycles` 中较小者，发送者按消息类型补足差值。flit 和控制消息逐跳耗时 `link_cycles`，归还 credit 耗时 `credit_cycles`。接收、credit 和 Shared 确认的 SST 事件优先级早于同拍预约。只有全部出口可接受时才执行分叉并释放输入槽。TMU 在整轮最后预约拍与本核最后一次 Shared 确认之后检查发布条件。节点在本地排空、credit 全数归还并收齐子树完成报告后向上报告，根记录最终排空拍。
+
+硬预约缺少输入、credit 或本地容量时，发现问题的节点记录 epoch、相对拍、端口和分片并终止 SST。节点观测 ID 随 flit 和 credit 跨组件传递。双线程在终止瞬间可能处于不同的局部仿真时间，合并回放截至首次违约拍，原始分节点文件保留现场。
